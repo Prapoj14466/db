@@ -1,0 +1,420 @@
+<script>
+    let statusChartInstance = null;
+
+    window.onload = () => {
+        loadDashboardData();
+
+        tinymce.init({
+            selector: '#sharedReportEditor',
+            plugins: 'link image table lists autolink',
+            toolbar: 'undo redo | blocks | bold italic textcolor | alignleft aligncenter alignright | bullist numlist | table | link image uploaddrive',
+            height: 500,
+            branding: false,
+            promotion: false,
+            readonly: true,
+            
+            content_style: `
+                .file-link-box { display: inline-flex; align-items: center; padding: 6px 14px; margin: 5px; border-radius: 8px; font-weight: 500; text-decoration: none !important; border: 2px solid #cbd5e1; background-color: #f8fafc; color: #334155 !important; font-family: system-ui, sans-serif; }
+                .file-link-box:hover { transform: translateY(-1px); box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+                .file-pdf { border-color: #ef4444; background-color: #fef2f2; color: #991b1b !important; }
+                .file-excel { border-color: #22c55e; background-color: #f0fdf4; color: #166534 !important; }
+                .file-word { border-color: #3b82f6; background-color: #eff6ff; color: #1e40af !important; }
+                .file-image { border-color: #a855f7; background-color: #faf5ff; color: #6b21a8 !important; }
+                
+                .upload-loading-box { display: inline-flex; align-items: center; padding: 6px 14px; margin: 5px; border: 2px dashed #f59e0b; background-color: #fffbeb; color: #d97706; border-radius: 8px; font-weight: bold; font-family: system-ui, sans-serif; animation: reportPulse 1.5s infinite; }
+                @keyframes reportPulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+            `,
+            
+            setup: function (editor) {
+                editor.ui.registry.addButton('uploaddrive', {
+                    icon: 'upload',
+                    tooltip: 'Upload & Insert Files',
+                    onAction: function () {
+                        document.getElementById('hiddenDocUploader').click();
+                    }
+                });
+
+                editor.on('init', function () {
+                    loadSharedReport(); 
+                });
+            }
+        });
+    };
+
+    function setEditorMode(mode) {
+        const editor = tinymce.get('sharedReportEditor');
+        if (!editor) return;
+
+        const btnView = document.getElementById('btnViewMode');
+        const btnEdit = document.getElementById('btnEditMode');
+        const btnSave = document.getElementById('btnSaveReport');
+
+        if (mode === 'view') {
+            editor.mode.set('readonly');
+            btnView.classList.add('btn-primary', 'active');
+            btnView.classList.remove('btn-outline-secondary');
+            btnEdit.classList.add('btn-outline-secondary');
+            btnEdit.classList.remove('btn-primary', 'active');
+            btnSave.style.display = 'none';
+        } else {
+            editor.mode.set('design');
+            btnEdit.classList.add('btn-primary', 'active');
+            btnEdit.classList.remove('btn-outline-secondary');
+            btnView.classList.add('btn-outline-secondary');
+            btnView.classList.remove('btn-primary', 'active');
+            btnSave.style.display = 'inline-block';
+        }
+    }
+
+    function loadSharedReport() {
+        google.script.run.withSuccessHandler(content => {
+            const editor = tinymce.get('sharedReportEditor');
+            if (content && editor) {
+                editor.setContent(content);
+            }
+        }).getSharedReport();
+    }
+
+    function saveSharedReport() {
+        const editor = tinymce.get('sharedReportEditor');
+        if (!editor) return; 
+        
+        const content = editor.getContent();
+        const btn = document.getElementById('btnSaveReport');
+        const originalText = btn.innerHTML;
+        
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Saving...';
+        btn.disabled = true;
+
+        google.script.run.withSuccessHandler(() => {
+            alert('✅ Report details saved successfully!');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            setEditorMode('view');
+        }).saveSharedReport(content);
+    }
+
+    async function uploadDirectToDoc(input) {
+        const files = input.files;
+        if (files.length === 0) return;
+
+        const editor = tinymce.activeEditor;
+        
+        for (let i = 0; i < files.length; i++) {
+            let file = files[i];
+            let fileId = 'loading-' + Math.random().toString(36).substring(2, 9);
+            
+            let loadingHtml = `<span id="${fileId}" class="upload-loading-box" contenteditable="false">⏳ กำลังอัปโหลด: ${file.name}...</span>`;
+            editor.insertContent(loadingHtml);
+
+            let reader = new FileReader();
+            reader.readAsDataURL(file);
+
+            await new Promise((resolve) => {
+                reader.onload = () => {
+                    google.script.run.withSuccessHandler(url => {
+                        if (url) {
+                            let ext = file.name.split('.').pop().toLowerCase();
+                            let colorClass = '';
+                            let icon = '📄';
+
+                            if (ext === 'pdf') {
+                                colorClass = 'file-pdf';
+                                icon = '📕';
+                            } else if (['xlsx', 'xls', 'csv'].includes(ext)) {
+                                colorClass = 'file-excel';
+                                icon = '📗';
+                            } else if (['docx', 'doc'].includes(ext)) {
+                                colorClass = 'file-word';
+                                icon = '📘';
+                            } else if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+                                colorClass = 'file-image';
+                                icon = '🖼️';
+                            }
+
+                            let finalHtml = `<a href="${url}" target="_blank" class="file-link-box ${colorClass}" contenteditable="false">${icon} ${file.name}</a>&nbsp;`;
+                            
+                            let loadingNode = editor.dom.select(`#${fileId}`)[0];
+                            if (loadingNode) {
+                                editor.dom.setOuterHTML(loadingNode, finalHtml);
+                            } else {
+                                editor.insertContent(finalHtml);
+                            }
+                        } else {
+                            let loadingNode = editor.dom.select(`#${fileId}`)[0];
+                            if (loadingNode) editor.dom.remove(loadingNode);
+                            alert('อัปโหลดไฟล์ ' + file.name + ' ผิดพลาด');
+                        }
+                        resolve();
+                    }).uploadFile(reader.result, file.name);
+                };
+            });
+        }
+        input.value = ''; 
+    }
+
+    // -------------------------------------------------------------------
+    // ฟังก์ชันอื่นๆ เดิมของระบบ
+    // -------------------------------------------------------------------
+    function toggleForm() {
+        const form = document.getElementById('formSection');
+        form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        if(form.style.display === 'block') form.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function uploadSingleFile(fileInputId) {
+        return new Promise((resolve, reject) => {
+            const file = document.getElementById(fileInputId).files[0];
+            if (!file) { resolve(""); return; }
+            
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+         
+            reader.onload = () => {
+                google.script.run
+                    .withSuccessHandler(url => resolve(url))
+                    .uploadFile(reader.result, file.name);
+            };
+        });
+    }
+
+    async function processForm() {
+        const btn = document.getElementById('btnSubmit');
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> UPLOADING...';
+        btn.disabled = true;
+
+        try {
+            const selectedFindings = Array.from(document.querySelectorAll('input[name="finding"]:checked'))
+                                          .map(cb => cb.value).join(', ');
+            const [reportUrl, carUrl, whyUrl, yokotenUrl] = await Promise.all([
+                uploadSingleFile('reportFiles'),
+                uploadSingleFile('carFiles'),
+                uploadSingleFile('whyFiles'),
+                uploadSingleFile('yokotenFiles')
+            ]);
+            const payload = {
+                auditDate: document.getElementById('auditDate').value,
+                plant: document.getElementById('plant').value,
+                dept: document.getElementById('dept').value,
+                findings: selectedFindings,
+                detail: document.getElementById('detail').value,
+                reportFiles: reportUrl,
+                carDetail: document.getElementById('carDetail').value,
+                carFiles: carUrl,
+                whyDetail: document.getElementById('whyDetail').value,
+                whyFiles: whyUrl,
+                carEmail: document.getElementById('carEmail').value,
+                carDeadline: document.getElementById('carDeadline').value,
+                carIntDeadline: document.getElementById('carIntDeadline').value,
+                statusCar: document.getElementById('statusCar').value,
+                evDeadline: document.getElementById('evDeadline').value,
+                evStatus: document.getElementById('evStatus').value,
+                fu1: document.getElementById('fu1').value,
+                fu2: document.getElementById('fu2').value,
+                fu3: document.getElementById('fu3').value,
+                yokotenDetail: document.getElementById('yokotenDetail').value,
+                yokotenFiles: yokotenUrl
+            };
+            google.script.run
+                .withSuccessHandler(msg => {
+                    alert(msg);
+                    document.getElementById('auditForm').reset();
+                    toggleForm();
+                    loadDashboardData();
+                    btn.innerHTML = 'SUBMIT DATA'; btn.disabled = false;
+                })
+                .saveAuditData(payload);
+        } catch(e) {
+            alert("Error: " + e);
+            btn.innerHTML = 'SUBMIT DATA'; btn.disabled = false;
+        }
+    }
+
+    function formatEnglishDate(dateString) {
+        if (!dateString || dateString === "-" || dateString.trim() === "") return dateString;
+        let d;
+        if (dateString.includes('/')) {
+            let parts = dateString.split('/');
+            if (parts[0].length <= 2) { 
+                d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+            } else { d = new Date(dateString); }
+        } else {
+            d = new Date(dateString);
+        }
+        if (isNaN(d.getTime())) return dateString;
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+
+    function loadDashboardData() {
+        google.script.run.withSuccessHandler(data => {
+            document.getElementById('stat-total').innerText = data.total;
+            document.getElementById('stat-open').innerText = data.open;
+            document.getElementById('stat-closed').innerText = data.closed;
+            document.getElementById('stat-overdue').innerText = data.overdue;
+            drawPieChart(data.open, data.closed, data.overdue);
+            
+            const summaryBody = document.getElementById('findingSummaryBody');
+            let summaryHtml = '';
+            const keys = [
+                "nc1 (Major NC)", "nc2 (Minor NC) HMM", "nc2 (Minor NC) LPB",
+                "OFI HMM", "OFI LPB", "Comment HMM", "Comment LPB"
+            ];
+            
+            keys.forEach(key => {
+                const item = data.findingSummary[key];
+                summaryHtml += `
+                    <tr>
+                        <td class="text-start ps-3">${key}</td>
+                        <td class="fw-bold">${item.count}</td>
+                        <td>${item.car}</td>
+                        <td>${item.ev}</td>
+                    </tr>`;
+            });
+            summaryBody.innerHTML = summaryHtml;
+
+            const tbody = document.getElementById('tableBody');
+            let html = '';
+            data.records.forEach(raw => {
+                const r = {};
+                for (let key in raw) {
+                    r[key] = (raw[key] === undefined || raw[key] === null || raw[key] === "undefined" || raw[key] === "") ? "" : raw[key];
+                }
+
+                r.date = formatEnglishDate(r.date);
+                r.carDeadline = formatEnglishDate(r.carDeadline);
+                r.carIntDeadline = formatEnglishDate(r.carIntDeadline);
+                r.evDeadline = formatEnglishDate(r.evDeadline);
+
+                let statusClass = r.statusCar === 'Open' ? 'bg-warning text-dark' : 'bg-success';
+                let carFileLink = (r.carFiles && r.carFiles.length > 10) ? `<br><a href="${r.carFiles}" target="_blank" class="badge bg-primary text-decoration-none mt-2"><i class="bi bi-paperclip"></i> View CAR File</a>` : '';
+                let whyFileLink = (r.whyFiles && r.whyFiles.length > 10) ? `<br><a href="${r.whyFiles}" target="_blank" class="badge bg-primary text-decoration-none mt-2"><i class="bi bi-paperclip"></i> View 5 Why File</a>` : '';
+                let yokoFileLink = (r.yokotenFiles && r.yokotenFiles.length > 10) ? `<br><a href="${r.yokotenFiles}" target="_blank" class="badge bg-primary text-decoration-none mt-2"><i class="bi bi-paperclip"></i> View Yoko-ten File</a>` : '';
+                
+                html += `<tr>
+                    <td class="text-center">${r.date}</td>
+                    <td class="text-center">${r.plant}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.findings}</td>
+                    <td class="text-center"><span class="badge bg-light text-dark border">${r.dept}</span></td>
+                    <td class="small text-wrap" style="min-width: 250px;">${r.carDetail} ${carFileLink}</td>
+                    <td class="small text-wrap" style="min-width: 250px;">${r.whyDetail} ${whyFileLink}</td>
+                    <td class="small text-center">${r.carEmail}</td>
+                    <td class="text-center">${r.carDeadline}</td>
+                    <td class="text-center">${r.carIntDeadline}</td>
+                    <td class="text-center"><span class="badge ${statusClass}">${r.statusCar}</span></td>
+                    <td class="text-center">${r.evDeadline}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.fu1}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.fu2}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.fu3}</td>
+                    <td class="small text-wrap" style="min-width: 200px;">${r.yokotenDetail} ${yokoFileLink}</td>
+                </tr>`;
+            });
+            
+            tbody.innerHTML = html || '<tr><td colspan="15" class="text-center py-5 text-muted">No records found.</td></tr>';
+        }).getDashboardData();
+    }
+
+    function drawPieChart(open, closed, overdue) {
+        const ctx = document.getElementById('statusChart').getContext('2d');
+        if(statusChartInstance) statusChartInstance.destroy();
+
+        const total = open + closed + overdue;
+        const slicePercentPlugin = {
+            id: 'slicePercent',
+            afterDraw: (chart) => {
+                const ctx = chart.ctx;
+                chart.data.datasets.forEach((dataset, i) => {
+                    const meta = chart.getDatasetMeta(i);
+                    meta.data.forEach((element, index) => {
+                        const dataVal = dataset.data[index];
+                        if (dataVal > 0) { 
+                            const percent = Math.round((dataVal / total) * 100) + '%';
+                            const position = element.tooltipPosition();
+                            ctx.fillStyle = '#ffffff'; 
+                            ctx.font = 'bold 13px sans-serif';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+                            ctx.shadowBlur = 4;
+                            ctx.shadowOffsetX = 1;
+                            ctx.shadowOffsetY = 1;
+                            ctx.fillText(percent, position.x, position.y);
+                            ctx.shadowColor = 'transparent';
+                        }
+                    });
+                });
+            }
+        };
+        
+        statusChartInstance = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Open', 'Closed', 'Overdue'],
+                datasets: [{
+                    data: [open, closed, overdue],
+                    backgroundColor: ['#f59e0b', '#10b981', '#ef4444'],
+                    borderWidth: 2,
+                    borderColor: '#ffffff' 
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { 
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.label || '';
+                                if (label) { label += ': '; }
+                                if (context.parsed !== null) {
+                                    let pct = Math.round((context.parsed / total) * 100) + '%';
+                                    label += context.parsed + ' (' + pct + ')';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                cutout: '55%' 
+            },
+            plugins: [slicePercentPlugin] 
+        });
+    }
+
+    function filterTable() {
+        const plantFilter = document.getElementById('plantFilter').value.toLowerCase();
+        const findingCheckboxes = document.querySelectorAll('.finding-filter-cb:checked');
+        const selectedFindings = Array.from(findingCheckboxes).map(cb => cb.value.toLowerCase());
+
+        const tbody = document.getElementById('tableBody');
+        const trs = tbody.getElementsByTagName('tr');
+        for (let i = 0; i < trs.length; i++) {
+            if (trs[i].cells.length <= 1) continue;
+            let plantCell = trs[i].cells[1];
+            let findingsCell = trs[i].cells[2]; 
+
+            if (plantCell && findingsCell) {
+                let plantText = plantCell.textContent.toLowerCase();
+                let findingsText = findingsCell.textContent.toLowerCase();
+
+                let matchPlant = (plantFilter === "" || plantText.includes(plantFilter));
+                let matchFindings = true;
+                if (selectedFindings.length > 0) {
+                    matchFindings = selectedFindings.some(filterWord => findingsText.includes(filterWord));
+                }
+
+                if (matchPlant && matchFindings) {
+                    trs[i].style.display = '';
+                } else {
+                    trs[i].style.display = 'none';
+                }
+            }
+        }
+    }
+
+    function clearFindingFilters() {
+        const checkboxes = document.querySelectorAll('.finding-filter-cb');
+        checkboxes.forEach(cb => cb.checked = false);
+        filterTable(); 
+    }
+</script>
