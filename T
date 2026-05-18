@@ -1,0 +1,183 @@
+สวัสดีครับคุณ Yoyo ขออธิบายและปรับแก้ให้ตรงกับกระบวนการ Audit ที่แท้จริงเลยนะครับ เป็น 2 คำถามที่เจาะลึกและตรงจุดมากครับ
+### 2. ทำไมถึงต้องมีให้กรอก CAR In Charge (Email) ทั้งๆ ที่ระบบแอบเก็บ Created By (อีเมลคนกดส่ง) ไว้แล้ว?
+เรื่องนี้เป็นหัวใจหลักของระบบ Workflow แบบ "Maker-Checker" เลยครับ ในโลกของการทำ Audit (และ Lotus Notes) **คนแจ้งปัญหา** กับ **คนแก้ปัญหา** มักจะเป็นคนละคนกันครับ:
+ * **Created By (ซ่อนอยู่หลังบ้าน):** คือ **"Auditor (ผู้ตรวจสอบ)"** หรือ QA ที่เดินไปเจอว่าหน้างานมีปัญหา เลยมาเปิดระบบแล้วกด New Audit เพื่อบันทึกปัญหาเข้าระบบ
+ * **CAR In Charge (Email) (ให้กรอกหน้าเว็บ):** คือ **"Auditee (ผู้ถูกตรวจสอบ)"** หรือหัวหน้าแผนก/วิศวกรที่ต้องเป็นคนรับผิดชอบไปทำ 5 Why และส่งรูปหลักฐาน (Evidence) มาเพื่อปิด CAR
+**💡 สิ่งที่เราจะปรับแก้ให้ดีขึ้น:** โค้ดรอบที่แล้วผมเปิดให้เฉพาะ Admin กับ Created By (คนสร้าง) เท่านั้นที่กด Edit ได้ แต่ในความเป็นจริง **คนที่ถูกมอบหมายงาน (CAR In Charge)** ก็ต้องเข้ามากด Edit เพื่อแนบไฟล์ 5 Why ส่งงานด้วย! เดี๋ยวผมจะอัปเดตโค้ดให้ระบบให้สิทธิ์ปุ่ม Edit กับทั้ง "คนสร้าง" และ "คนที่ต้องแก้" ครับ
+### 1. หน้า Shared Audit Report ให้เปลี่ยนตามปีที่เลือก
+เพื่อให้กล่องข้อความ Doc ข้างล่างเปลี่ยนเนื้อหาไปตามปี (Year) ที่เลือกใน Dropdown เราต้องเปลี่ยนวิธีการเก็บข้อมูลใน Sheet ReportData จากเดิมที่ยัดรวมในช่องเดียว (A1) ให้กลายเป็นแบบตาราง คือ **คอลัมน์ A เก็บปี** และ **คอลัมน์ B เก็บเนื้อหา HTML** ครับ
+คุณ Yoyo ก๊อปปี้โค้ดชุดนี้ไป **วางทับฟังก์ชันเดิม** ได้เลยครับ:
+### 🟢 ไฟล์ Code.gs
+ให้เลื่อนไปด้านล่างสุดของไฟล์ ลบฟังก์ชัน getSharedReport และ saveSharedReport อันเก่าทิ้ง แล้ววางชุดนี้แทนครับ:
+```javascript
+// 🌟 ฟังก์ชันดึงข้อมูล Shared Report แยกตามปี
+function getSharedReport(year) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName("ReportData");
+  if (!sheet) return ""; 
+
+  // ถ้าไม่ได้เลือกปี หรือเลือก All ให้ดึงของปีปัจจุบัน
+  if (!year || year === "All") year = new Date().getFullYear().toString();
+  
+  var data = sheet.getDataRange().getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][0].toString() === year.toString()) {
+      return data[i][1]; // คืนค่าเนื้อหา HTML ของปีนั้น
+    }
+  }
+  return ""; // ถ้ายังไม่มีข้อมูลของปีนั้น ให้คืนค่าช่องว่าง
+}
+
+// 🌟 ฟังก์ชันบันทึก Shared Report แยกตามปี
+function saveSharedReport(htmlContent, year) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName("ReportData");
+  
+  if (!sheet) {
+    sheet = ss.insertSheet("ReportData");
+  }
+
+  if (!year || year === "All") year = new Date().getFullYear().toString();
+  
+  var data = sheet.getDataRange().getValues();
+  var found = false;
+  
+  // วนลูปหาว่าปีนี้มีบันทึกไว้หรือยัง
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][0].toString() === year.toString()) {
+      sheet.getRange(i + 1, 2).setValue(htmlContent); // ถ้าเจอ อัปเดตทับ
+      found = true;
+      break;
+    }
+  }
+  
+  // ถ้าหาไม่เจอ แปลว่าเป็นปีใหม่ ให้เพิ่มแถวใหม่
+  if (!found) {
+    sheet.appendRow([year, htmlContent]);
+  }
+  return true;
+}
+
+```
+### 🔵 ไฟล์ JavaScript.html
+ในไฟล์นี้ ให้หาฟังก์ชันเก่า 3 ตัวนี้แล้ว **วางทับใหม่** ครับ (จะมีการอัปเดตให้ปุ่ม Edit เปิดให้ carEmail เข้ามาแก้ไขได้ด้วย และผูก Report กับ Dropdown ปีครับ)
+**1. หา loadSharedReport() และ saveSharedReport() แล้ววางทับด้วย 2 ตัวนี้:**
+```javascript
+    function loadSharedReport() {
+        const yearSelect = document.getElementById('yearFilter');
+        let selectedYear = yearSelect ? yearSelect.value : new Date().getFullYear().toString();
+        
+        google.script.run.withSuccessHandler(content => {
+            const editor = tinymce.get('sharedReportEditor');
+            if (editor) editor.setContent(content || "");
+        }).getSharedReport(selectedYear); // ส่งปีที่เลือกไปหลังบ้าน
+    }
+
+    function saveSharedReport() {
+        const editor = tinymce.get('sharedReportEditor');
+        if (!editor) return; 
+        
+        const yearSelect = document.getElementById('yearFilter');
+        let selectedYear = yearSelect ? yearSelect.value : new Date().getFullYear().toString();
+        if (selectedYear === "All") {
+            selectedYear = new Date().getFullYear().toString(); // ถ้าเลือก All จะบันทึกเป็นปีปัจจุบัน
+        }
+        
+        const content = editor.getContent();
+        const btn = document.getElementById('btnSaveReport');
+        const originalText = btn.innerHTML;
+        
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Saving...';
+        btn.disabled = true;
+
+        google.script.run.withSuccessHandler(() => {
+            alert('✅ Report details saved for year ' + selectedYear + ' successfully!');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            setEditorMode('view');
+        }).saveSharedReport(content, selectedYear); // ส่งปีไปคู่กับข้อมูล
+    }
+
+```
+**2. หาฟังก์ชัน loadDashboardData() แล้ววางโค้ดชุดนี้ทับเลยครับ:**
+*(ผมแทรกคำสั่งให้โหลด Report ใหม่ทุกครั้งที่เปลี่ยนปี และเปิดสิทธิ์ Edit ให้คนรับผิดชอบ CAR ให้แล้วครับ)*
+```javascript
+    function loadDashboardData() {
+        const selectedYear = document.getElementById('yearFilter') ? document.getElementById('yearFilter').value : "All";
+        
+        // 🌟 สั่งให้ดึง Doc Report ของปีนั้นๆ มาแสดงด้วยทันที
+        loadSharedReport(); 
+        
+        google.script.run.withSuccessHandler(data => {
+            currentIsAdmin = data.isAdmin; 
+            
+            const yearSelect = document.getElementById('yearFilter');
+            if (yearSelect && yearSelect.options.length <= 1 && data.availableYears.length > 0) {
+                data.availableYears.forEach(y => {
+                    let opt = document.createElement('option');
+                    opt.value = y; opt.text = "Year " + y;
+                    yearSelect.appendChild(opt);
+                });
+            }
+
+            document.getElementById('stat-total').innerText = data.total;
+            document.getElementById('stat-open').innerText = data.open;
+            document.getElementById('stat-closed').innerText = data.closed;
+            document.getElementById('stat-overdue').innerText = data.overdue;
+            drawPieChart(data.open, data.closed, data.overdue);
+            
+            const summaryBody = document.getElementById('findingSummaryBody');
+            let summaryHtml = '';
+            const keys = ["nc1 (Major NC)", "nc2 (Minor NC) HMM", "nc2 (Minor NC) LPB", "OFI HMM", "OFI LPB", "Comment HMM", "Comment LPB"];
+            
+            keys.forEach(key => {
+                const item = data.findingSummary[key];
+                summaryHtml += `<tr><td class="text-start ps-3">${key}</td><td class="fw-bold">${item.count}</td><td>${item.car}</td><td>${item.ev}</td></tr>`;
+            });
+            summaryBody.innerHTML = summaryHtml;
+
+            const tbody = document.getElementById('tableBody');
+            let html = '';
+            data.records.forEach(raw => {
+                const r = {};
+                for (let key in raw) r[key] = (raw[key] === undefined || raw[key] === null || raw[key] === "undefined" || raw[key] === "") ? "" : raw[key];
+
+                let actionBtn = '';
+                // 🌟 อัปเดตสิทธิ์: Admin, คนสร้าง (Auditor), และ คนรับผิดชอบ (Auditee) สามารถกด Edit ได้
+                if (data.isAdmin || data.currentUserEmail === r.createdBy || data.currentUserEmail === r.carEmail) {
+                    let recordJson = encodeURIComponent(JSON.stringify(raw));
+                    actionBtn = `<button class="btn btn-sm btn-primary shadow-sm" onclick="editRecord('${recordJson}')"><i class="bi bi-pencil-square"></i> Edit</button>`;
+                } else {
+                    actionBtn = `<button class="btn btn-sm btn-light text-muted border" disabled title="Locked"><i class="bi bi-lock-fill"></i></button>`;
+                }
+
+                let statusClass = r.statusCar === 'Open' ? 'bg-warning text-dark' : 'bg-success';
+                let carFileLink = (r.carFiles && r.carFiles.length > 10) ? `<br><a href="${r.carFiles}" target="_blank" class="badge bg-primary text-decoration-none mt-2"><i class="bi bi-paperclip"></i> View CAR File</a>` : '';
+                let whyFileLink = (r.whyFiles && r.whyFiles.length > 10) ? `<br><a href="${r.whyFiles}" target="_blank" class="badge bg-primary text-decoration-none mt-2"><i class="bi bi-paperclip"></i> View 5 Why File</a>` : '';
+                let yokoFileLink = (r.yokotenFiles && r.yokotenFiles.length > 10) ? `<br><a href="${r.yokotenFiles}" target="_blank" class="badge bg-primary text-decoration-none mt-2"><i class="bi bi-paperclip"></i> View Yoko-ten File</a>` : '';
+                
+                html += `<tr>
+                    <td class="text-center">${actionBtn}</td> 
+                    <td class="text-center">${formatEnglishDate(r.date)}</td>
+                    <td class="text-center">${r.plant}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.findings}</td>
+                    <td class="text-center"><span class="badge bg-light text-dark border">${r.dept}</span></td>
+                    <td class="small text-wrap" style="min-width: 250px;">${r.carDetail} ${carFileLink}</td>
+                    <td class="small text-wrap" style="min-width: 250px;">${r.whyDetail} ${whyFileLink}</td>
+                    <td class="small text-center">${r.carEmail}</td>
+                    <td class="text-center">${formatEnglishDate(r.carDeadline)}</td>
+                    <td class="text-center">${formatEnglishDate(r.carIntDeadline)}</td>
+                    <td class="text-center"><span class="badge ${statusClass}">${r.statusCar}</span></td>
+                    <td class="text-center">${formatEnglishDate(r.evDeadline)}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.fu1}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.fu2}</td>
+                    <td class="small text-wrap" style="min-width: 150px;">${r.fu3}</td>
+                    <td class="small text-wrap" style="min-width: 200px;">${r.yokotenDetail} ${yokoFileLink}</td>
+                </tr>`;
+            });
+            tbody.innerHTML = html || '<tr><td colspan="16" class="text-center py-5 text-muted">No records found for this year.</td></tr>';
+        }).getDashboardData(selectedYear);
+    }
+
+```
+ก๊อปปี้ไปวางทับแล้ว Refresh ลองกดเปลี่ยนปีไปมาดูนะครับ กล่องข้อความ Report จะดึงเนื้อหาแยกปีกันแล้วครับ!
